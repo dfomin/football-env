@@ -3,7 +3,7 @@
 AI Football Competition Environment
 
 Usage:
-    python main.py                    # Run game with visualization
+    python main.py                   # Run game with visualization
     python main.py --no-viz          # Run game without visualization
     python main.py --replay LOG.json # Replay a game log
     python main.py --help            # Show help
@@ -24,12 +24,71 @@ from agents.random_agent import (
 )
 from game_logging.logger import GameLogger
 
+# Mapping from agent type names to classes
+AGENT_CLASSES = {
+    "random": RandomAgent,
+    "chaser": ChaserAgent,
+    "goalie": GoalieAgent,
+    "striker": StrikerAgent,
+    "defender": DefenderAgent,
+    "interceptor": InterceptorAgent,
+    "midfielder": MidfielderAgent,
+    "aggressor": AggressorAgent,
+    "winger": WingerAgent,
+}
+
+# Strategy presets (for backward compatibility)
+STRATEGY_PRESETS = ["mixed", "tactical", "aggressive", "balanced", "wings", "diverse", "randomized"]
+
+DEFAULT_AGENT_TYPE = "chaser"
+
 
 def create_agents(config: GameConfig, agent_type: str = "mixed") -> tuple:
-    """Create agent teams based on type."""
+    """Create agent teams based on type.
+
+    agent_type can be:
+    - A preset strategy: mixed, tactical, aggressive, balanced, wings, diverse, randomized
+    - A single agent type: random, chaser, goalie, striker, defender, interceptor, midfielder, aggressor, winger
+    - Comma-separated agent types: goalie,striker,defender,chaser (assigns to players in order, both teams)
+
+    For comma-separated: if fewer agents than needed (2 * players_per_team), fills with default.
+    Raises ValueError if more agents specified than needed.
+    """
     team0_agents: List[BaseAgent] = []
     team1_agents: List[BaseAgent] = []
     n = config.players_per_team
+    total_needed = 2 * n
+
+    # Check if comma-separated or single agent type (not a preset strategy)
+    if "," in agent_type or (agent_type in AGENT_CLASSES and agent_type not in STRATEGY_PRESETS):
+        # Parse comma-separated agent types
+        agent_types = [t.strip() for t in agent_type.split(",")]
+
+        # Validate count
+        if len(agent_types) > total_needed:
+            raise ValueError(
+                f"Too many agents specified: {len(agent_types)} given, but only {total_needed} needed "
+                f"(2 teams × {n} players). Remove {len(agent_types) - total_needed} agent(s)."
+            )
+
+        # Validate each agent type
+        for i, at in enumerate(agent_types):
+            if at not in AGENT_CLASSES:
+                valid_types = ", ".join(sorted(AGENT_CLASSES.keys()))
+                raise ValueError(f"Unknown agent type '{at}' at position {i + 1}. Valid types: {valid_types}")
+
+        # Fill with default if fewer specified
+        while len(agent_types) < total_needed:
+            agent_types.append(DEFAULT_AGENT_TYPE)
+
+        # First n agents go to team0, next n to team1
+        for i in range(n):
+            cls0 = AGENT_CLASSES[agent_types[i]]
+            cls1 = AGENT_CLASSES[agent_types[n + i]]
+            team0_agents.append(cls0(team_id=0, player_id=i))
+            team1_agents.append(cls1(team_id=1, player_id=i))
+
+        return team0_agents, team1_agents
 
     if agent_type == "random":
         for i in range(n):
@@ -198,11 +257,14 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python main.py                         # Run with default settings
-  python main.py --players 3             # 3v3 game
-  python main.py --no-viz --ticks 5000   # Long game, no visualization
-  python main.py --replay game.json      # Replay a saved game
-  python main.py --agents chaser         # Use chaser agents
+  python main.py                                          # Run with default settings
+  python main.py --players 3                              # 3v3 game
+  python main.py --no-viz --ticks 5000                    # Long game, no visualization
+  python main.py --replay game.json                       # Replay a saved game
+  python main.py --agents tactical                        # Use tactical preset
+  python main.py --agents goalie,striker                  # Specify each player's agent
+  python main.py --agents goalie,striker,goalie,defender  # Full team specification (2v2)
+  python main.py --players 3 --agents goalie,striker      # Partial spec, rest use default
         """,
     )
 
@@ -236,9 +298,12 @@ Examples:
     )
     parser.add_argument(
         "--agents",
-        choices=["random", "chaser", "mixed", "tactical", "aggressive", "interceptor", "balanced", "wings", "diverse", "randomized"],
         default="randomized",
-        help="Agent type (default: randomized). Options: random, chaser, mixed, tactical, aggressive, interceptor, balanced, wings, diverse, randomized",
+        help="Agent configuration. Can be a preset (mixed, tactical, aggressive, balanced, wings, diverse, randomized) "
+             "or comma-separated agent types for each player (e.g., goalie,striker,defender,chaser). "
+             "Available agent types: random, chaser, goalie, striker, defender, interceptor, midfielder, aggressor, winger. "
+             "If fewer agents specified than players, remaining use default (chaser). "
+             "Error if more agents specified than needed (2 * players_per_team).",
     )
     parser.add_argument(
         "--log",
@@ -276,7 +341,11 @@ Examples:
     )
 
     # Create agents
-    team0, team1 = create_agents(config, args.agents)
+    try:
+        team0, team1 = create_agents(config, args.agents)
+    except ValueError as e:
+        print(f"Error: {e}")
+        sys.exit(1)
 
     print(f"Starting {args.players}v{args.players} game")
     print(f"Max ticks: {args.ticks}, Win score: {args.win_score}")
