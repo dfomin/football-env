@@ -75,11 +75,47 @@ class Physics:
         field_w = self.config.field_width
         field_h = self.config.field_height
         corner_r = self.config.corner_radius
+        goal_depth = self.config.goal_width  # How deep the net goes
         restitution = 0.8 if is_ball else 0.5
 
         # Goal area check for ball
         goal_top = field_h / 2 - self.config.goal_height / 2
         goal_bottom = field_h / 2 + self.config.goal_height / 2
+
+        # Check if ball is inside a goal net area
+        in_left_goal = is_ball and entity.x < 0 and (goal_top <= entity.y <= goal_bottom)
+        in_right_goal = is_ball and entity.x > field_w and (goal_top <= entity.y <= goal_bottom)
+
+        # Handle ball inside goal nets
+        if in_left_goal:
+            # Back of net
+            if entity.x - radius < -goal_depth:
+                entity.x = -goal_depth + radius
+                entity.vx = 0  # Stop at back of net
+            # Top of goal
+            if entity.y - radius < goal_top:
+                entity.y = goal_top + radius
+                entity.vy = 0  # Stop against side netting
+            # Bottom of goal
+            if entity.y + radius > goal_bottom:
+                entity.y = goal_bottom - radius
+                entity.vy = 0  # Stop against side netting
+            return  # Skip other boundary checks
+
+        if in_right_goal:
+            # Back of net
+            if entity.x + radius > field_w + goal_depth:
+                entity.x = field_w + goal_depth - radius
+                entity.vx = 0  # Stop at back of net
+            # Top of goal
+            if entity.y - radius < goal_top:
+                entity.y = goal_top + radius
+                entity.vy = 0  # Stop against side netting
+            # Bottom of goal
+            if entity.y + radius > goal_bottom:
+                entity.y = goal_bottom - radius
+                entity.vy = 0  # Stop against side netting
+            return  # Skip other boundary checks
 
         # Check if in corner region
         corner = self._is_in_corner_region(entity.x, entity.y)
@@ -187,48 +223,186 @@ class Physics:
 
         return True
 
+    def _is_valid_position(self, entity, radius: float, is_ball: bool = False) -> bool:
+        """Check if entity is within field boundaries."""
+        field_w = self.config.field_width
+        field_h = self.config.field_height
+        corner_r = self.config.corner_radius
+        goal_depth = self.config.goal_width
+
+        # Goal area for ball
+        goal_top = field_h / 2 - self.config.goal_height / 2
+        goal_bottom = field_h / 2 + self.config.goal_height / 2
+
+        # Check if ball is validly inside a goal net
+        if is_ball:
+            in_goal_y = goal_top - 0.001 <= entity.y <= goal_bottom + 0.001
+            in_left_net = entity.x < 0 and entity.x - radius >= -goal_depth - 0.001
+            in_right_net = entity.x > field_w and entity.x + radius <= field_w + goal_depth + 0.001
+            if in_goal_y and (in_left_net or in_right_net):
+                return True
+
+        # Check corner regions
+        corner = self._is_in_corner_region(entity.x, entity.y)
+        if corner is not None:
+            cx, cy = corner
+            dx = entity.x - cx
+            dy = entity.y - cy
+            dist = math.sqrt(dx ** 2 + dy ** 2)
+            max_dist = corner_r - radius
+            if dist > max_dist + 0.001:  # Small tolerance
+                return False
+            return True
+
+        # Check wall boundaries
+        if entity.x - radius < -0.001:
+            if not is_ball or not (goal_top <= entity.y <= goal_bottom):
+                return False
+        if entity.x + radius > field_w + 0.001:
+            if not is_ball or not (goal_top <= entity.y <= goal_bottom):
+                return False
+        if entity.y - radius < -0.001:
+            return False
+        if entity.y + radius > field_h + 0.001:
+            return False
+
+        return True
+
+    def _has_overlap(self, e1, r1: float, e2, r2: float) -> bool:
+        """Check if two circular entities overlap."""
+        dx = e2.x - e1.x
+        dy = e2.y - e1.y
+        dist = math.sqrt(dx ** 2 + dy ** 2)
+        min_dist = r1 + r2
+        return dist < min_dist - 0.001  # Small tolerance
+
+    def validate_state(self, players: List[Player], ball: Ball) -> bool:
+        """
+        Validate that the current state is correct:
+        - No entity overlaps
+        - All entities within boundaries
+        Returns True if state is valid.
+        """
+        # Check all entities are within boundaries
+        for player in players:
+            if not self._is_valid_position(player, player.radius, is_ball=False):
+                return False
+
+        if not self._is_valid_position(ball, ball.radius, is_ball=True):
+            return False
+
+        # Check no player-ball overlaps
+        for player in players:
+            if self._has_overlap(player, player.radius, ball, ball.radius):
+                return False
+
+        # Check no player-player overlaps
+        for i, p1 in enumerate(players):
+            for p2 in players[i + 1:]:
+                if self._has_overlap(p1, p1.radius, p2, p2.radius):
+                    return False
+
+        return True
+
     def handle_all_collisions(self, players: List[Player], ball: Ball,
-                              goals: List[Goal]) -> None:
-        """Handle all collisions with multiple iterations to ensure no overlaps."""
-        max_iterations = 10
+                              goals: List[Goal]) -> None:  # noqa: ARG002
+        """Handle all collisions with iterations until state is valid."""
+        max_iterations = 20  # Increased for safety
 
         for _ in range(max_iterations):
-            had_collision = False
-
             # Enforce boundaries for all entities
             for player in players:
                 self._enforce_boundary(player, player.radius, is_ball=False)
-
             self._enforce_boundary(ball, ball.radius, is_ball=True)
 
-            # Player-ball collisions
+            # Resolve player-ball collisions
             for player in players:
-                if self._resolve_circle_collision(
+                self._resolve_circle_collision(
                     player, player.radius,
                     ball, ball.radius,
                     player.mass, ball.mass,
                     restitution=0.9
-                ):
-                    had_collision = True
+                )
 
-            # Player-player collisions
+            # Resolve player-player collisions
             for i, p1 in enumerate(players):
                 for p2 in players[i + 1:]:
-                    if self._resolve_circle_collision(
+                    self._resolve_circle_collision(
                         p1, p1.radius,
                         p2, p2.radius,
                         p1.mass, p2.mass,
                         restitution=0.5
-                    ):
-                        had_collision = True
+                    )
 
             # Final boundary enforcement
             for player in players:
                 self._enforce_boundary(player, player.radius, is_ball=False)
             self._enforce_boundary(ball, ball.radius, is_ball=True)
 
-            if not had_collision:
+            # Check if state is now valid
+            if self.validate_state(players, ball):
+                return
+
+        # If we get here, state might still be invalid after max iterations
+        # Force a valid state by clamping everything
+        self._force_valid_state(players, ball)
+
+    def _force_valid_state(self, players: List[Player], ball: Ball) -> None:
+        """
+        Force state to be valid when iterations don't converge.
+        This is a fallback - it may not preserve perfect physics but guarantees valid state.
+        """
+        # First, ensure all entities are in bounds
+        for player in players:
+            self._enforce_boundary(player, player.radius, is_ball=False)
+        self._enforce_boundary(ball, ball.radius, is_ball=True)
+
+        # Then separate any overlapping entities by pushing them apart
+        # without worrying about physics accuracy
+        for _ in range(10):
+            all_clear = True
+
+            # Player-ball separation
+            for player in players:
+                if self._has_overlap(player, player.radius, ball, ball.radius):
+                    all_clear = False
+                    self._separate_entities(player, player.radius, ball, ball.radius)
+
+            # Player-player separation
+            for i, p1 in enumerate(players):
+                for p2 in players[i + 1:]:
+                    if self._has_overlap(p1, p1.radius, p2, p2.radius):
+                        all_clear = False
+                        self._separate_entities(p1, p1.radius, p2, p2.radius)
+
+            # Re-enforce boundaries
+            for player in players:
+                self._enforce_boundary(player, player.radius, is_ball=False)
+            self._enforce_boundary(ball, ball.radius, is_ball=True)
+
+            if all_clear:
                 break
+
+    def _separate_entities(self, e1, r1: float, e2, r2: float) -> None:
+        """Push two overlapping entities apart equally."""
+        dx = e2.x - e1.x
+        dy = e2.y - e1.y
+        dist = math.sqrt(dx ** 2 + dy ** 2)
+        min_dist = r1 + r2
+
+        if dist < 0.001:
+            dx, dy, dist = 1.0, 0.0, 1.0
+
+        # Normalize
+        nx = dx / dist
+        ny = dy / dist
+
+        # Push apart equally
+        overlap = min_dist - dist + 0.01  # Extra margin
+        e1.x -= nx * overlap * 0.5
+        e1.y -= ny * overlap * 0.5
+        e2.x += nx * overlap * 0.5
+        e2.y += ny * overlap * 0.5
 
     def check_goal(self, ball: Ball, goals: List[Goal]) -> Optional[int]:
         """

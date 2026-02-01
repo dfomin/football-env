@@ -77,9 +77,10 @@ def create_agents(config: GameConfig, agent_type: str = "mixed") -> tuple:
                 valid_types = ", ".join(sorted(AGENT_CLASSES.keys()))
                 raise ValueError(f"Unknown agent type '{at}' at position {i + 1}. Valid types: {valid_types}")
 
-        # Fill with default if fewer specified
+        # Fill with random agents if fewer specified
+        all_agent_types = list(AGENT_CLASSES.keys())
         while len(agent_types) < total_needed:
-            agent_types.append(DEFAULT_AGENT_TYPE)
+            agent_types.append(random.choice(all_agent_types))
 
         # First n agents go to team0, next n to team1
         for i in range(n):
@@ -87,6 +88,12 @@ def create_agents(config: GameConfig, agent_type: str = "mixed") -> tuple:
             cls1 = AGENT_CLASSES[agent_types[n + i]]
             team0_agents.append(cls0(team_id=0, player_id=i))
             team1_agents.append(cls1(team_id=1, player_id=i))
+
+        # Log selected agents
+        team0_names = [agent.__class__.__name__.replace("Agent", "") for agent in team0_agents]
+        team1_names = [agent.__class__.__name__.replace("Agent", "") for agent in team1_agents]
+        print(f"Team 0: {', '.join(team0_names)}")
+        print(f"Team 1: {', '.join(team1_names)}")
 
         return team0_agents, team1_agents
 
@@ -178,6 +185,12 @@ def create_agents(config: GameConfig, agent_type: str = "mixed") -> tuple:
             cls1 = random.choice(agent_classes)
             team0_agents.append(cls0(team_id=0, player_id=i))
             team1_agents.append(cls1(team_id=1, player_id=i))
+
+    # Log selected agents
+    team0_names = [agent.__class__.__name__.replace("Agent", "") for agent in team0_agents]
+    team1_names = [agent.__class__.__name__.replace("Agent", "") for agent in team1_agents]
+    print(f"Team 0: {', '.join(team0_names)}")
+    print(f"Team 1: {', '.join(team1_names)}")
 
     return team0_agents, team1_agents
 
@@ -311,9 +324,9 @@ Examples:
         help="Path to save game log",
     )
     parser.add_argument(
-        "--no-log",
+        "--save-log",
         action="store_true",
-        help="Disable game log saving",
+        help="Save game log to file",
     )
     parser.add_argument(
         "--scale",
@@ -359,7 +372,7 @@ Examples:
         team1,
         visualize=not args.no_viz,
         log_path=args.log,
-        save_log=not args.no_log,
+        save_log=args.save_log,
     )
 
     print()

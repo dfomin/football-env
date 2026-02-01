@@ -21,7 +21,7 @@ class GameConfig:
     ball_mass: float = 0.5
 
     # Goal settings
-    goal_width: float = 10.0
+    goal_width: float = 40.0  # Net depth (must be > ball diameter for ball to fit)
     goal_height: float = 120.0
 
     # Kick settings
