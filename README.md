@@ -2,6 +2,8 @@
 
 A 2D football (soccer) simulation environment for AI agent competition.
 
+![Football Game Demo](football.gif)
+
 ## Usage
 
 ```bash
