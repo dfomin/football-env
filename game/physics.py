@@ -33,6 +33,9 @@ class Physics:
         for player in players:
             player.x += player.vx
             player.y += player.vy
+            # Apply friction to players
+            player.vx *= self.config.player_friction
+            player.vy *= self.config.player_friction
 
         ball.x += ball.vx
         ball.y += ball.vy

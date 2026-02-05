@@ -32,6 +32,12 @@ from network.protocol import (
     decode_state,
     encode_action,
 )
+from visualization.renderer import Renderer, PYGAME_AVAILABLE
+
+try:
+    import pygame
+except ImportError:
+    pygame = None
 
 
 # Agent type mapping
@@ -76,6 +82,27 @@ class KeyboardClient:
 
         return Action(ax * 0.5, ay * 0.5, kick)
 
+    def get_action_from_pygame(self) -> Action:
+        """Get action from pygame key state (polled each frame)."""
+        ax, ay = 0.0, 0.0
+        kick = False
+
+        if pygame:
+            # Use get_pressed() to poll current key state directly
+            keys = pygame.key.get_pressed()
+            if keys[pygame.K_w]:
+                ay = -1.0
+            if keys[pygame.K_s]:
+                ay = 1.0
+            if keys[pygame.K_a]:
+                ax = -1.0
+            if keys[pygame.K_d]:
+                ax = 1.0
+            if keys[pygame.K_SPACE]:
+                kick = True
+
+        return Action(ax * 0.5, ay * 0.5, kick)
+
 
 class GameClient:
     """Client that connects to a football game server."""
@@ -97,6 +124,7 @@ class GameClient:
         self.player_id: Optional[int] = None
         self.agent = None
         self.keyboard_client: Optional[KeyboardClient] = None
+        self.renderer: Optional[Renderer] = None
 
         if keyboard:
             self.keyboard_client = KeyboardClient()
@@ -111,7 +139,11 @@ class GameClient:
 
     def get_action(self, state: GameState) -> Action:
         """Get action for the current state."""
-        if self.keyboard_client:
+        if self.keyboard_client and self.renderer:
+            # Use pygame keyboard input (polled each frame)
+            return self.keyboard_client.get_action_from_pygame()
+        elif self.keyboard_client:
+            # Fallback to terminal-based input
             return self.keyboard_client.get_action()
         elif self.agent:
             return self.agent.get_action(state)
@@ -135,6 +167,10 @@ class GameClient:
                             self.config = decode_config(data)
                             print(f"Received config: {self.config.players_per_team}v{self.config.players_per_team}")
 
+                            # Create renderer for keyboard mode
+                            if self.keyboard and PYGAME_AVAILABLE:
+                                self.renderer = Renderer(self.config, title="Football Client")
+
                         elif msg_type == MessageType.ASSIGN:
                             self.team_id = data['team_id']
                             self.player_id = data['player_id']
@@ -143,18 +179,27 @@ class GameClient:
                             # Create agent now that we know our assignment
                             self.agent = self.create_agent(self.team_id, self.player_id)
                             if self.keyboard:
-                                print("Keyboard control active: WASD=move, Space=kick")
+                                print("Keyboard control active: WASD=move, Space=kick, ESC=quit")
+                                # Highlight controlled player
+                                if self.renderer:
+                                    self.renderer.set_active_player(self.team_id, self.player_id)
                             else:
                                 print(f"Using agent: {self.agent_type}")
 
                         elif msg_type == MessageType.STATE:
                             # Game state update - compute and send action
                             state = decode_state(data)
+
+                            # Render if visualization enabled
+                            if self.renderer:
+                                if not self.renderer.render(state):
+                                    break  # Window closed
+
                             action = self.get_action(state)
                             await websocket.send(encode_action(action))
 
-                            # Print score occasionally
-                            if state.tick % 60 == 0:
+                            # Print score occasionally (only if no renderer)
+                            if not self.renderer and state.tick % 60 == 0:
                                 print(f"Tick {state.tick}: Score {state.score[0]} - {state.score[1]}", end='\r')
 
                         elif msg_type == MessageType.GAME_OVER:
@@ -168,6 +213,12 @@ class GameClient:
                                     print("Your team loses!")
                             else:
                                 print("Draw!")
+
+                            # Show final state briefly then close renderer
+                            if self.renderer:
+                                import time
+                                time.sleep(2)
+                                self.renderer.close()
                             break
 
                         elif msg_type == MessageType.ERROR:
@@ -290,12 +341,19 @@ Available agents: random, chaser, goalie, striker, defender, interceptor, midfie
     )
 
     try:
-        if args.keyboard:
+        if args.keyboard and PYGAME_AVAILABLE:
+            # Use pygame for visualization and input
+            asyncio.run(client.run())
+        elif args.keyboard:
+            # Fallback to terminal input if pygame not available
             asyncio.run(run_with_keyboard(client))
         else:
             asyncio.run(client.run())
     except KeyboardInterrupt:
         print("\nDisconnected.")
+    finally:
+        if client.renderer:
+            client.renderer.close()
 
 
 if __name__ == "__main__":

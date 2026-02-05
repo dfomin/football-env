@@ -32,6 +32,7 @@ from network.protocol import (
     encode_error,
 )
 from network.network_agent import NetworkAgent
+from visualization.renderer import Renderer, PYGAME_AVAILABLE
 
 
 class GameServer:
@@ -43,12 +44,15 @@ class GameServer:
         host: str = "0.0.0.0",
         port: int = 8765,
         tick_rate: int = 30,
+        viz: bool = False,
     ):
         self.config = config
         self.host = host
         self.port = port
         self.tick_rate = tick_rate
         self.tick_interval = 1.0 / tick_rate
+        self.viz = viz
+        self.renderer = None
 
         # Player slots: (team_id, player_id) -> NetworkAgent or None
         self.total_players = config.players_per_team * 2
@@ -77,6 +81,12 @@ class GameServer:
 
     async def handle_client(self, websocket) -> None:
         """Handle a new client connection."""
+        # Reject connections once game has started
+        if self.game_started:
+            await websocket.send(encode_error("Game already in progress"))
+            await websocket.close()
+            return
+
         slot = self.get_open_slot()
 
         if slot is None:
@@ -137,10 +147,6 @@ class GameServer:
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
 
-    async def collect_actions(self, timeout: float = 0.1) -> None:
-        """Wait briefly for clients to respond with actions."""
-        await asyncio.sleep(timeout)
-
     async def run_game(self) -> None:
         """Run the game loop."""
         print(f"Starting game with {self.total_players} players!")
@@ -170,19 +176,29 @@ class GameServer:
         self.game = Game(self.config, team0_agents, team1_agents)
         self.game_started = True
 
+        # Initialize renderer if visualization enabled
+        if self.viz and PYGAME_AVAILABLE:
+            self.renderer = Renderer(self.config, title="Football Server")
+
         # Game loop
         while self.game.status == GameStatus.RUNNING:
+            # Render if enabled
+            if self.renderer:
+                state = self.game.get_state()
+                if not self.renderer.render(state):
+                    break  # Window closed
+
             # Broadcast current state to all clients
             await self.broadcast_state()
 
-            # Wait for actions (with timeout)
-            await self.collect_actions(self.tick_interval * 0.8)
+            # Brief wait for client actions
+            await asyncio.sleep(self.tick_interval * 0.5)
 
             # Step the game
             self.game.step()
 
             # Maintain tick rate
-            await asyncio.sleep(self.tick_interval * 0.2)
+            await asyncio.sleep(self.tick_interval * 0.5)
 
         # Game over - send final results
         final_state = self.game.get_state()
@@ -194,6 +210,13 @@ class GameServer:
             print(f"Team {winner} wins!")
         else:
             print("Draw!")
+
+        # Show final state and close renderer
+        if self.renderer:
+            self.renderer.render(final_state)
+            import time
+            time.sleep(2)  # Show final state briefly
+            self.renderer.close()
 
         # Send game over to all clients
         message = encode_game_over(score, winner)
@@ -255,8 +278,8 @@ Examples:
     parser.add_argument(
         "--tick-rate",
         type=int,
-        default=30,
-        help="Game tick rate in Hz (default: 30)",
+        default=60,
+        help="Game tick rate in Hz (default: 60)",
     )
     parser.add_argument(
         "--ticks",
@@ -269,6 +292,16 @@ Examples:
         type=int,
         default=5,
         help="Score to win (default: 5)",
+    )
+    parser.add_argument(
+        "--viz",
+        action="store_true",
+        help="Enable visualization window",
+    )
+    parser.add_argument(
+        "--no-viz",
+        action="store_true",
+        help="Disable visualization (default)",
     )
 
     args = parser.parse_args()
@@ -285,6 +318,7 @@ Examples:
         host=args.host,
         port=args.port,
         tick_rate=args.tick_rate,
+        viz=args.viz,
     )
 
     try:

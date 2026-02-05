@@ -13,6 +13,7 @@ class GameConfig:
     player_max_speed: float = 5.0
     player_max_acceleration: float = 0.5
     player_mass: float = 1.0
+    player_friction: float = 0.85  # Players slow down quickly when not accelerating
 
     # Ball settings
     ball_radius: float = 10.0
@@ -27,7 +28,7 @@ class GameConfig:
     # Kick settings
     kick_power: float = 12.0  # Impulse applied to ball when kicked
     kick_range: float = 35.0  # Max distance from player center to ball center to kick
-    kick_cooldown_ticks: int = 30  # Ticks before player can kick again (~0.5 sec)
+    kick_cooldown_ticks: int = 10  # Ticks before player can kick again (~0.17 sec)
 
     # Field corner radius (rounded corners)
     corner_radius: float = 50.0
@@ -84,6 +85,7 @@ class GameConfig:
             'player_max_speed': self.player_max_speed,
             'player_max_acceleration': self.player_max_acceleration,
             'player_mass': self.player_mass,
+            'player_friction': self.player_friction,
             'ball_radius': self.ball_radius,
             'ball_max_speed': self.ball_max_speed,
             'ball_friction': self.ball_friction,
