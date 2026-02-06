@@ -1,6 +1,6 @@
 """Server-side network agent wrapper."""
 
-import asyncio
+import threading
 from typing import Optional, TYPE_CHECKING
 
 from agents.base import BaseAgent, Action
@@ -23,23 +23,21 @@ class NetworkAgent(BaseAgent):
         team_id: int,
         player_id: int,
         websocket: 'websockets.WebSocketServerProtocol',
-        timeout_ms: float = 100.0,
     ):
         super().__init__(team_id, player_id)
         self.websocket = websocket
-        self.timeout_sec = timeout_ms / 1000.0
         self._pending_action: Optional[Action] = None
-        self._action_event: Optional[asyncio.Event] = None
+        self._lock = threading.Lock()
 
     def set_pending_action(self, action: Action) -> None:
         """Set the pending action received from the client."""
-        self._pending_action = action
-        if self._action_event:
-            self._action_event.set()
+        with self._lock:
+            self._pending_action = action
 
     def clear_pending_action(self) -> None:
         """Clear the pending action."""
-        self._pending_action = None
+        with self._lock:
+            self._pending_action = None
 
     def get_action(self, state: 'GameState') -> Action:
         """
@@ -52,10 +50,9 @@ class NetworkAgent(BaseAgent):
         The server should have already sent the state and received the
         action before this is called.
         """
-        if self._pending_action is not None:
-            action = self._pending_action
-            self._pending_action = None
-            return action
+        with self._lock:
+            if self._pending_action is not None:
+                return self._pending_action
         # Default action if no response received
         return Action(0.0, 0.0, False)
 
@@ -66,4 +63,5 @@ class NetworkAgent(BaseAgent):
 
     def reset(self) -> None:
         """Called when game resets (after goal scored)."""
-        self._pending_action = None
+        with self._lock:
+            self._pending_action = None

@@ -1,3 +1,4 @@
+import math
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -18,6 +19,13 @@ class Action:
         self.ax = float(self.ax)
         self.ay = float(self.ay)
         self.kick = bool(self.kick)
+        # Reject inf/nan and clamp to valid range
+        if not math.isfinite(self.ax):
+            self.ax = 0.0
+        if not math.isfinite(self.ay):
+            self.ay = 0.0
+        self.ax = max(-1.0, min(1.0, self.ax))
+        self.ay = max(-1.0, min(1.0, self.ay))
 
     def to_dict(self) -> dict:
         """Serialize action to dictionary for network transmission."""

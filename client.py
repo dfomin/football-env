@@ -12,7 +12,9 @@ Usage:
 
 import argparse
 import asyncio
+import json
 import sys
+import traceback
 from typing import Optional
 
 import websockets
@@ -216,8 +218,7 @@ class GameClient:
 
                             # Show final state briefly then close renderer
                             if self.renderer:
-                                import time
-                                time.sleep(2)
+                                await asyncio.sleep(2)
                                 self.renderer.close()
                             break
 
@@ -225,8 +226,14 @@ class GameClient:
                             print(f"Error from server: {data['message']}")
                             break
 
+                    except (json.JSONDecodeError, ValueError) as e:
+                        print(f"Protocol error: {e}")
+                    except websockets.exceptions.ConnectionClosed:
+                        print("\nConnection to server lost.")
+                        break
                     except Exception as e:
-                        print(f"Error processing message: {e}")
+                        print(f"Unexpected error processing message: {e}")
+                        traceback.print_exc()
 
         except ConnectionRefusedError:
             print(f"Could not connect to {uri}. Is the server running?")
@@ -261,10 +268,12 @@ async def run_with_keyboard(client: GameClient) -> None:
                         elif char == 'q':
                             # Quit
                             break
+                        # Yield to event loop after processing input
+                        await asyncio.sleep(0)
                     else:
-                        # Clear keys when not pressed (simple approach)
-                        await asyncio.sleep(0.05)
+                        # No input — clear keys after a brief hold period
                         client.keyboard_client.keys_pressed.clear()
+                        await asyncio.sleep(0.02)
 
             # Run both tasks
             keyboard_task = asyncio.create_task(keyboard_input())

@@ -11,7 +11,7 @@ Usage:
 
 import argparse
 import asyncio
-import random
+import sys
 from typing import Any, Dict, List, Optional
 
 import websockets
@@ -19,7 +19,6 @@ import websockets
 from game.config import GameConfig
 from game.engine import Game
 from game.state import GameStatus
-from agents.base import Action
 from agents.random_agent import ChaserAgent
 from network.protocol import (
     MessageType,
@@ -95,7 +94,7 @@ class GameServer:
             return
 
         team_id, player_id = slot
-        agent = NetworkAgent(team_id, player_id, websocket, self.config.agent_timeout_ms)
+        agent = NetworkAgent(team_id, player_id, websocket)
         self.player_slots[slot] = agent
         self.websocket_to_slot[websocket] = slot
 
@@ -108,6 +107,7 @@ class GameServer:
 
             # Check if we should start the game
             if self.count_connected() == self.total_players and not self.game_started:
+                self.game_started = True
                 self.start_event.set()
 
             # Handle messages from client
@@ -174,7 +174,6 @@ class GameServer:
 
         # Create game
         self.game = Game(self.config, team0_agents, team1_agents)
-        self.game_started = True
 
         # Initialize renderer if visualization enabled
         if self.viz and PYGAME_AVAILABLE:
@@ -182,6 +181,11 @@ class GameServer:
 
         # Game loop
         while self.game.status == GameStatus.RUNNING:
+            # Stop if all clients disconnected
+            if self.count_connected() == 0:
+                print("\nAll clients disconnected. Stopping game.")
+                break
+
             # Render if enabled
             if self.renderer:
                 state = self.game.get_state()
@@ -191,14 +195,14 @@ class GameServer:
             # Broadcast current state to all clients
             await self.broadcast_state()
 
-            # Brief wait for client actions
-            await asyncio.sleep(self.tick_interval * 0.5)
+            # Wait for client actions (80% of tick for network round-trip)
+            await asyncio.sleep(self.tick_interval * 0.8)
 
             # Step the game
             self.game.step()
 
             # Maintain tick rate
-            await asyncio.sleep(self.tick_interval * 0.5)
+            await asyncio.sleep(self.tick_interval * 0.2)
 
         # Game over - send final results
         final_state = self.game.get_state()
@@ -214,8 +218,7 @@ class GameServer:
         # Show final state and close renderer
         if self.renderer:
             self.renderer.render(final_state)
-            import time
-            time.sleep(2)  # Show final state briefly
+            await asyncio.sleep(2)  # Show final state briefly
             self.renderer.close()
 
         # Send game over to all clients
@@ -224,7 +227,7 @@ class GameServer:
             if agent is not None and agent.is_connected():
                 try:
                     await agent.websocket.send(message)
-                except Exception:
+                except websockets.exceptions.ConnectionClosed:
                     pass
 
     async def start(self) -> None:
@@ -234,7 +237,14 @@ class GameServer:
         print(f"Players per team: {self.config.players_per_team}")
         print()
 
-        async with websockets.serve(self.handle_client, self.host, self.port):
+        try:
+            server = await websockets.serve(self.handle_client, self.host, self.port)
+        except OSError as e:
+            print(f"Error: Could not start server on {self.host}:{self.port} — {e}")
+            print("Is another server already running on this port?")
+            sys.exit(1)
+
+        async with server:
             # Wait for all players to connect
             await self.start_event.wait()
 

@@ -3,13 +3,14 @@
 # Flexible game launcher
 # Usage:
 #   ./play.sh                           # 2v2, you + 3 random bots
-#   ./play.sh striker goalie            # 2v2, you + striker + goalie + 1 random bot
+#   ./play.sh -p 3                      # 3v3, you + 5 random bots
+#   ./play.sh striker goalie defender   # 2v2, you + 3 named bots
+#   ./play.sh -p 3 striker goalie       # 3v3, you + 2 named + 3 random bots
 #   ./play.sh striker goalie defender midfielder  # 2v2, all bots, server viz
-#   ./play.sh -p 3 striker goalie       # 3v3, you + 2 provided + 3 random bots
 
 PLAYERS=2
 
-# Parse -p/--players option
+# Parse -p/--players option (players per team, like main.py)
 while [[ $# -gt 0 ]]; do
     case $1 in
         -p|--players)
@@ -27,46 +28,62 @@ AGENTS=("$@")
 PROVIDED=${#AGENTS[@]}
 TOTAL=$((PLAYERS * 2))
 
-echo "Game: ${PLAYERS}v${PLAYERS} ($TOTAL players needed)"
-echo "Provided agents: $PROVIDED"
+if [ $PROVIDED -ge $TOTAL ]; then
+    USE_KEYBOARD=false
+    echo "Game: ${PLAYERS}v${PLAYERS} ($TOTAL bots)"
+else
+    USE_KEYBOARD=true
+    echo "Game: ${PLAYERS}v${PLAYERS} (you + $((TOTAL - 1)) AI)"
+fi
 
+PORT=8765
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PID_FILE="$SCRIPT_DIR/.football_server.pid"
 CLIENT_PIDS_FILE="$SCRIPT_DIR/.football_clients.pid"
 
-# Kill previous game started by this script (if any)
-if [ -f "$PID_FILE" ]; then
-    OLD_PID=$(cat "$PID_FILE")
-    if kill -0 "$OLD_PID" 2>/dev/null; then
-        echo "Stopping previous server (PID $OLD_PID)..."
-        kill "$OLD_PID" 2>/dev/null
-        sleep 0.3
+kill_port() {
+    # Kill any process listening on the game port
+    local pids
+    pids=$(lsof -ti :$PORT 2>/dev/null)
+    if [ -n "$pids" ]; then
+        echo "Killing stale process(es) on port $PORT..."
+        echo "$pids" | xargs kill 2>/dev/null
+        sleep 0.5
+        # Force kill if still alive
+        pids=$(lsof -ti :$PORT 2>/dev/null)
+        [ -n "$pids" ] && echo "$pids" | xargs kill -9 2>/dev/null
     fi
-    rm -f "$PID_FILE"
-fi
+}
+
+# Kill previous game
 if [ -f "$CLIENT_PIDS_FILE" ]; then
     while read -r pid; do
         kill "$pid" 2>/dev/null
     done < "$CLIENT_PIDS_FILE"
     rm -f "$CLIENT_PIDS_FILE"
 fi
+kill_port
+rm -f "$PID_FILE"
 
 cleanup() {
     echo ""
     echo "Shutting down..."
-    kill $SERVER_PID 2>/dev/null
-    rm -f "$PID_FILE"
     if [ -f "$CLIENT_PIDS_FILE" ]; then
         while read -r pid; do
             kill "$pid" 2>/dev/null
         done < "$CLIENT_PIDS_FILE"
         rm -f "$CLIENT_PIDS_FILE"
     fi
+    kill_port
+    rm -f "$PID_FILE"
     exit 0
 }
 trap cleanup EXIT INT TERM
 
-if [ $PROVIDED -ge $TOTAL ]; then
+# Random bot types for filler
+RANDOM_BOTS=(chaser striker defender midfielder goalie)
+
+if [ "$USE_KEYBOARD" = false ]; then
     # All slots filled with bots - server shows visualization
     echo "All slots filled - server visualization mode"
     echo ""
@@ -89,18 +106,13 @@ if [ $PROVIDED -ge $TOTAL ]; then
     echo "Game running. Close window or Ctrl+C to stop."
     wait $SERVER_PID
 else
-    # Need keyboard player - client shows visualization
-    KEYBOARD_SLOTS=1
-    BOTS_NEEDED=$((TOTAL - PROVIDED - KEYBOARD_SLOTS))
+    # Keyboard mode - client shows visualization
+    BOTS_NEEDED=$((TOTAL - PROVIDED - 1))
 
-    echo "Adding keyboard player with visualization"
     if [ $BOTS_NEEDED -gt 0 ]; then
         echo "Adding $BOTS_NEEDED random bot(s) to fill slots"
     fi
     echo ""
-
-    # Random bot types for filler
-    RANDOM_BOTS=(chaser striker defender midfielder goalie)
 
     uv run python server.py --players "$PLAYERS" &
     SERVER_PID=$!
@@ -117,13 +129,15 @@ else
     done
 
     # Fill remaining with random bots
-    for i in $(seq 1 $BOTS_NEEDED); do
-        RAND_IDX=$((RANDOM % ${#RANDOM_BOTS[@]}))
-        AGENT=${RANDOM_BOTS[$RAND_IDX]}
-        uv run python client.py localhost --agent "$AGENT" &
-        echo $! >> "$CLIENT_PIDS_FILE"
-        echo "  Bot (random): $AGENT"
-    done
+    if [ $BOTS_NEEDED -gt 0 ]; then
+        for i in $(seq 1 $BOTS_NEEDED); do
+            RAND_IDX=$((RANDOM % ${#RANDOM_BOTS[@]}))
+            AGENT=${RANDOM_BOTS[$RAND_IDX]}
+            uv run python client.py localhost --agent "$AGENT" &
+            echo $! >> "$CLIENT_PIDS_FILE"
+            echo "  Bot (random): $AGENT"
+        done
+    fi
 
     sleep 1
     echo ""
