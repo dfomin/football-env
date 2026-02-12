@@ -4,6 +4,32 @@ A 2D football (soccer) simulation environment for AI agent competition.
 
 ![Football Game Demo](football.gif)
 
+## Installation
+
+### With uv (recommended)
+
+```bash
+uv sync
+```
+
+Then prefix commands with `uv run`:
+
+```bash
+uv run python main.py
+```
+
+### With pip
+
+```bash
+pip install -e .
+```
+
+Then run commands directly:
+
+```bash
+python main.py
+```
+
 ## Usage
 
 ```bash
